@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB Parser</title>
+    <link rel="icon" type="image/png" href="/content/OceanofPDF.png">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --border-color: #cccccc;
+            --highlight-color: #e9e9e9;
+            --progress-bg: #f0f0f0;
+            --progress-fill: #4CAF50;
+        }
+
+        .dark-mode {
+            --bg-color: #333333;
+            --text-color: #ffffff;
+            --border-color: #555555;
+            --highlight-color: #444444;
+            --progress-bg: #555555;
+            --progress-fill: #66BB6A;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0;
+        }
+
+        #darkModeToggle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 24px;
+        }
+
+        #dropZone {
+            border: 2px dashed var(--border-color);
+            border-radius: 20px;
+            width: 100%;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        #dropZone.dragover {
+            background-color: var(--highlight-color);
+        }
+
+        #progressContainer {
+            width: 100%;
+            background-color: var(--progress-bg);
+            margin-top: 20px;
+            display: none;
+        }
+
+        #progressBar {
+            width: 0%;
+            height: 30px;
+            background-color: var(--progress-fill);
+            text-align: center;
+            line-height: 30px;
+            color: white;
+        }
+
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>EPUB Parser</h1>
+    <button id="darkModeToggle">🌓</button>
+</div>
+<p>Upload an EPUB file to remove all instances of "OceanofPDF.com" and download the parsed file.</p>
+<div id="dropZone">
+    <p>Drag and drop your EPUB file here, or click to select a file</p>
+    <input type="file" id="fileInput" accept=".epub" style="display: none;">
+</div>
+<div id="progressContainer">
+    <div id="progressBar">0%</div>
+</div>
+<div id="status"></div>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const status = document.getElementById('status');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const darkModeToggle = document.getElementById('darkModeToggle');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', handleFile);
+    fileInput.addEventListener('change', handleFile);
+
+    darkModeToggle.addEventListener('click', toggleDarkMode);
+
+    function handleFile(e) {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+
+        const file = e.target.files?.[0] || e.dataTransfer?.files[0];
+        if (!file || file.type !== 'application/epub+zip') {
+            status.textContent = 'Please upload a valid EPUB file.';
+            return;
+        }
+
+        status.textContent = 'Parsing EPUB file...';
+        progressContainer.style.display = 'block';
+        processEPUB(file);
+    }
+
+    async function processEPUB(file) {
+        try {
+            const zip = new JSZip();
+            const contents = await zip.loadAsync(file);
+            const totalFiles = Object.keys(contents.files).length;
+            let processedFiles = 0;
+            let totalInstances = 0;
+
+            for (const [filename, zipEntry] of Object.entries(contents.files)) {
+                if (zipEntry.dir) {
+                    processedFiles++;
+                    updateProgress(processedFiles, totalFiles);
+                    continue;
+                }
+
+                const isImage = /\.(jpg|jpeg|png|gif|svg)$/i.test(filename);
+
+                if (isImage) {
+                    const imageData = await zipEntry.async('uint8array');
+                    zip.file(filename, imageData);
+                } else {
+                    let content = await zipEntry.async('string');
+                    const instancesInFile = (content.match(/OceanofPDF\.com/g) || []).length;
+                    totalInstances += instancesInFile;
+                    content = content.replace(/OceanofPDF\.com/g, '');
+                    zip.file(filename, content);
+                }
+
+                processedFiles++;
+                updateProgress(processedFiles, totalFiles);
+            }
+
+            const parsedEPUB = await zip.generateAsync({type: 'blob', mimeType: 'application/epub+zip'});
+            const bookName = extractBookName(file.name);
+            downloadFile(parsedEPUB, bookName);
+            status.textContent = `EPUB parsed successfully! Removed ${totalInstances} instance(s) of "OceanofPDF.com".`;
+        } catch (error) {
+            status.textContent = `Error parsing EPUB: ${error.message}`;
+        }
+    }
+
+    function updateProgress(processed, total) {
+        const percentage = Math.round((processed / total) * 100);
+        progressBar.style.width = `${percentage}%`;
+        progressBar.textContent = `${percentage}%`;
+
+        if (percentage === 100) {
+            status.textContent = 'Parsing complete. Downloading file...';
+        }
+    }
+
+    function extractBookName(filename) {
+        const match = filename.match(/_OceanofPDF\.com(.+)_-_.+\.epub$/);
+        if (match) {
+            return match[1].replace(/_/g, ' ').trim() + '.epub';
+        }
+        return 'Parsed Book.epub';
+    }
+
+    function downloadFile(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        darkModeToggle.textContent = document.body.classList.contains('dark-mode') ? '☀️' : '🌙';
+    }
+
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        toggleDarkMode();
+    }
+</script>
+</body>
+</html>
